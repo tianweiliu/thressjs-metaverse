@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta charset=utf-8>
+	<title>Introduction to three.js VR</title>
+	<style>
+		* {
+			box-sizing: border-box overflow: hidden
+		}
+
+		body {
+			margin: 0
+		}
+
+		canvas {
+			width: 100% height: 100%
+		}
+	</style>
+</head>
+
+<body>
+	<script async src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"></script>
+
+	<script type="importmap">
+		{
+			"imports": {
+			"three": "https://unpkg.com/three@0.147.0/build/three.module.js"
+			}
+		}
+		</script>
+
+	<script type="module">
+		import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js'
+
+		import { getDatabase, ref, get, set, push, onChildAdded, onChildChanged, onChildRemoved } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-database.js"
+
+		// TODO: Replace the following with your app's Firebase project configuration
+		const firebaseConfig = {
+		}
+
+		// Initialize Firebase
+		const app = initializeApp(firebaseConfig)
+		const db = getDatabase(app)
+
+		import * as THREE from 'three'
+		// import this to use mouse to control camera
+		import { OrbitControls } from 'https://unpkg.com/three/examples/jsm/controls/OrbitControls.js'
+
+		// import this to use WebXR's VR mode
+		import { VRButton } from 'https://unpkg.com/three/examples/jsm/webxr/VRButton.js'
+
+		import { GLTFLoader } from 'https://unpkg.com/three/examples/jsm/loaders/GLTFLoader.js'
+
+
+		var scene = new THREE.Scene()
+
+		var camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 1, 2000)
+
+		var renderer = new THREE.WebGLRenderer()
+
+		// Enable WebXR support
+		renderer.xr.enabled = true
+		renderer.xr.setReferenceSpaceType('local')
+
+		renderer.setPixelRatio(window.devicePixelRatio)
+		renderer.setSize(window.innerWidth, window.innerHeight)
+		document.body.appendChild(renderer.domElement)
+
+		// Initiate VRButton.js (three.js's WebXR(VR) support lib)
+		document.body.appendChild(VRButton.createButton(renderer))
+
+		// Initiate OrbitControls
+		var controls = new OrbitControls(camera, renderer.domElement)
+
+		var panoSphereGeo = new THREE.SphereBufferGeometry(20, 256, 256)
+		var panoSphereMat = new THREE.MeshBasicMaterial({ color: 0xffff00 })
+		var panoSphereTex = new THREE.TextureLoader().load('assets/pano/kandao3.jpg')
+		panoSphereTex.minFilter = THREE.NearestFilter
+		panoSphereTex.generateMipmaps = false
+		var panoSphereDep = new THREE.TextureLoader().load('assets/pano/kandao3_depthmap.jpg')
+		panoSphereDep.minFilter = THREE.NearestFilter
+		panoSphereDep.generateMipmaps = false
+		var panoSphereMat = new THREE.MeshBasicMaterial({
+			side: THREE.BackSide,
+			displacementScale: - 4.0,
+			map: panoSphereTex,
+			displacementMap: panoSphereDep
+		})
+		var sphere = new THREE.Mesh(panoSphereGeo, panoSphereMat)
+		scene.add(sphere)
+
+		var light = new THREE.AmbientLight(0xffffff, 1)
+		scene.add(light)
+		const directionalLight = new THREE.DirectionalLight( 0xffffff, 0.5 )
+		scene.add( directionalLight )
+
+		const loader = new GLTFLoader()
+
+		var render = function () {
+			// if not in XR(VR) mode, use OrbitControls to control camera
+			if (renderer.xr.isPresenting === false) {
+				controls.update()
+			}
+			renderer.render(scene, camera)
+		}
+
+		var animate = function () {
+			renderer.setAnimationLoop(render)
+		}
+
+		animate()
+
+		const myCamera = {
+			x: Math.random(5) * 5 + 3,
+			z: Math.random(5) * 5 + 3,
+		}
+		camera.position.x = myCamera.x
+		camera.position.y = 0
+		camera.position.z = myCamera.z
+		const self = push(ref(db, 'users/'), {
+			rotation: {
+				x: camera.rotation.x,
+				y: camera.rotation.y,
+				z: camera.rotation.z,
+			},
+			position: myCamera
+		})
+
+		const userId = self.key
+		console.log(userId)
+
+		controls.addEventListener('change', () => {
+			set(ref(db, 'users/' + userId), {
+				rotation: {
+					x: camera.rotation.x,
+					y: camera.rotation.y,
+					z: camera.rotation.z
+				},
+				position: {
+					x: camera.position.x,
+					z: camera.position.z
+				}
+			})
+		})
+
+		const userData = {}
+		const userModel = {}
+		const onUserAdded = onChildAdded(ref(db, 'users/'), (data) => {
+			if (data.key != userId) {
+				if (!userData.hasOwnProperty(data.key)) {
+					userData[data.key] = data.val()
+					console.log("User joined, " + data.key)
+					console.log(userData)
+					loader.load('models/gltf/RobotExpressive.glb', function (gltf) {
+						const model = gltf.scene
+						model.traverse(function (object) {
+							if (object.isMesh) object.castShadow = true
+						})
+						const skeleton = new THREE.SkeletonHelper(model)
+						skeleton.rotation.y = 90 / Math.PI
+						skeleton.visible = true
+						const bone = skeleton.bones[4]
+						userModel[data.key] = {
+							model: model,
+							skeleton: skeleton,
+							bone: bone
+						}
+						scene.add(userModel[data.key].model)
+						scene.add(userModel[data.key].skeleton)
+						updateModel(userData[data.key], model, bone)
+					})
+				}
+			}
+		})
+
+		const onUserChanged = onChildChanged(ref(db, 'users/'), (data) => {
+			if (data.key != userId) {
+				if (userModel.hasOwnProperty(data.key) && userData.hasOwnProperty(data.key)) {
+					userData[data.key] = data.val();
+					const model = userModel[data.key].model
+					const bone = userModel[data.key].bone
+					updateModel(userData[data.key], model, bone)
+				}
+			}
+		})
+
+		const onUserRemoved = onChildRemoved(ref(db, 'users/'), (data) => {
+			if (data.key != userId) {
+				if (userData.hasOwnProperty(data.key)) {
+					delete userData[data.key]
+					console.log("User left, " + data.key)
+					scene.remove(userModel[data.key].model)
+					scene.remove(userModel[data.key].skeleton)
+					delete userModel[data.key]
+				}
+			}
+		})
+
+		const updateModel = function(data, model, bone) {
+			model.position.x = data.position.x
+			model.position.y = -1.2
+			model.position.z = data.position.z
+			model.rotation.x = data.rotation.x
+			model.rotation.y = data.rotation.y
+			model.rotation.z = data.rotation.z
+			const axis = new THREE.Vector3(0,1,0);
+			model.rotateOnAxis(axis, 90 / Math.PI);
+		}
+
+		window.onbeforeunload = function () {
+			set(ref(db, 'users/' + userId), null)
+		}
+	</script>
+</body>
+
+</html>
